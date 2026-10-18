@@ -2,6 +2,9 @@ name: Build unsigned IPA
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - codex/ios-val-shop-20261018
 
 permissions:
   contents: read
