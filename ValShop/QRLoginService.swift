@@ -118,8 +118,15 @@ final class QRLoginService {
     }
 
     private func parseCallback(_ text: String) -> (code: String, redirectURL: String?)? {
-        guard let expression = try? NSRegularExpression(pattern: "ptuiCB\\('([^']*)','([^']*)','([^']*)','([^']*)'"),
-                                                         options: []) else { return nil }
+        let expression: NSRegularExpression
+        do {
+            expression = try NSRegularExpression(
+                pattern: "ptuiCB\\('([^']*)','([^']*)','([^']*)','([^']*)'",
+                options: []
+            )
+        } catch {
+            return nil
+        }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
         guard let result = expression.firstMatch(in: text, range: range), result.numberOfRanges >= 5 else { return nil }
         func value(_ index: Int) -> String { guard let r = Range(result.range(at: index), in: text) else { return "" }; return String(text[r]) }
