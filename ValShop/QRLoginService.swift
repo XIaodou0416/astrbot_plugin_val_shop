@@ -16,22 +16,24 @@ struct LoginResult {
 }
 
 /// QQ 扫码登录的纯 HTTP 客户端，流程对应插件中的 xlogin → ptqrshow → ptqrlogin。
-/// 若第三方登录参数发生变化，用户仍可在“账号”页手动填入 userId/tid 使用商店查询。
 final class QRLoginService {
     private let session: URLSession
+    private let cookieStorage: HTTPCookieStorage
     private let loginURL = URL(string: "https://xui.ptlogin2.qq.com/cgi-bin/xlogin?pt_enable_pwd=1&appid=716027609&pt_3rd_aid=102061775&daid=381&pt_skey_valid=0&style=35&force_qr=1&autorefresh=1&s_url=http%3A%2F%2Fconnect.qq.com&refer_cgi=m_authorize&ucheck=1&fall_to_wv=1&redirect_uri=auth%3A%2F%2Ftauth.qq.com%2F&client_id=102061775&pf=openmobile_android&response_type=token&scope=all&sdkp=a&sdkv=3.5.17.lite&status_machine=MjMxMTdSSzY2Qw%3D%3D&switch=1&show_download_ui=true&loginty=6")!
 
     init() {
         let configuration = URLSessionConfiguration.ephemeral
-        configuration.httpCookieStorage = HTTPCookieStorage()
+        cookieStorage = HTTPCookieStorage()
+        configuration.httpCookieStorage = cookieStorage
         configuration.httpCookieAcceptPolicy = .always
+        configuration.httpShouldSetCookies = true
         session = URLSession(configuration: configuration)
     }
 
     func makeQRCode() async throws -> QRLoginPayload {
         var request = URLRequest(url: loginURL)
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
-        let (pageData, _) = try await session.data(for: request)
+        let (pageData, pageResponse) = try await session.data(for: request)
         let page = String(decoding: pageData, as: UTF8.self)
         let loginSig = match(#"g_login_sig=encodeURIComponent\(\"([^\"]+)\"\)"#, in: page) ?? cookie("pt_login_sig") ?? ""
         let jsver = match(#"jsver\s*=\s*['\"]([^'\"]+)['\"]"#, in: page) ?? "28d22679"
@@ -39,9 +41,11 @@ final class QRLoginService {
         var qrRequest = URLRequest(url: qrURL)
         qrRequest.setValue(loginURL.absoluteString, forHTTPHeaderField: "Referer")
         qrRequest.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
-        let (imageData, _) = try await session.data(for: qrRequest)
-        guard !imageData.isEmpty, let qrsig = cookie("qrsig") else { throw LoginError.qrUnavailable }
-        let token = qrsig.utf8.reduce(0) { (($0 << 5) - $0) + Int($1) } & 0x7fffffff
+        let (imageData, qrResponse) = try await session.data(for: qrRequest)
+        guard !imageData.isEmpty else { throw LoginError.qrUnavailable }
+        let qrsig = cookie("qrsig") ?? responseCookie("qrsig", from: qrResponse) ?? responseCookie("qrsig", from: pageResponse)
+        guard let qrsig, !qrsig.isEmpty else { throw LoginError.qrUnavailable }
+        let token = calcToken(qrsig)
         _ = loginSig
         _ = jsver
         return QRLoginPayload(imageData: imageData, token: token, loginURL: loginURL, cookies: session.configuration.httpCookieStorage?.cookies ?? [])
@@ -106,7 +110,26 @@ final class QRLoginService {
     }
 
     private func cookie(_ name: String) -> String? {
-        session.configuration.httpCookieStorage?.cookies?.first(where: { $0.name == name })?.value
+        cookieStorage.cookies?.first(where: { $0.name == name })?.value
+    }
+
+    private func responseCookie(_ name: String, from response: URLResponse) -> String? {
+        guard let http = response as? HTTPURLResponse else { return nil }
+        for (rawKey, rawValue) in http.allHeaderFields {
+            guard String(describing: rawKey).lowercased() == "set-cookie" else { continue }
+            let header = String(describing: rawValue)
+            for part in header.split(separator: ";") {
+                let pair = part.split(separator: "=", maxSplits: 1).map(String.init)
+                if pair.count == 2, pair[0].trimmingCharacters(in: .whitespaces) == name { return pair[1] }
+            }
+        }
+        return nil
+    }
+
+    private func calcToken(_ qrsig: String) -> Int {
+        var token = 0
+        for byte in qrsig.utf8 { token += (token << 5) + Int(byte) }
+        return token & 0x7fffffff
     }
 
     private func match(_ pattern: String, in text: String) -> String? {
@@ -121,16 +144,16 @@ final class QRLoginService {
         let expression: NSRegularExpression
         do {
             expression = try NSRegularExpression(
-                pattern: "ptuiCB\\('([^']*)','([^']*)','([^']*)','([^']*)'",
+                pattern: "ptuiCB\\('([^']*)','([^']*)','([^']*)','([^']*)','([^']*)'",
                 options: []
             )
         } catch {
             return nil
         }
         let range = NSRange(text.startIndex..<text.endIndex, in: text)
-        guard let result = expression.firstMatch(in: text, range: range), result.numberOfRanges >= 5 else { return nil }
+        guard let result = expression.firstMatch(in: text, range: range), result.numberOfRanges >= 6 else { return nil }
         func value(_ index: Int) -> String { guard let r = Range(result.range(at: index), in: text) else { return "" }; return String(text[r]) }
-        return (value(1), value(4).removingPercentEncoding)
+        return (value(1), value(3).replacingOccurrences(of: "\\/", with: "/").replacingOccurrences(of: "\\x26", with: "&").removingPercentEncoding)
     }
 }
 

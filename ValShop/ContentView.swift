@@ -8,8 +8,6 @@ struct ContentView: View {
     @State private var showingAccount = false
     @State private var showingWatchlist = false
 
-    private let columns = [GridItem(.flexible(), spacing: 14), GridItem(.flexible(), spacing: 14)]
-
     var body: some View {
         NavigationStack {
             ZStack {
@@ -17,6 +15,7 @@ struct ContentView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 24) {
                         header
+                        storeTabs
                         if accountStore.credential == nil {
                             welcomeCard
                         } else {
@@ -29,6 +28,9 @@ struct ContentView: View {
                 }
                 .refreshable {
                     await shopModel.reload(using: accountStore.credential)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    ShopBottomBar { showingAccount = true }
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -57,20 +59,31 @@ struct ContentView: View {
                     .tracking(-0.7)
                 Text(Date.now, format: .dateTime.month(.wide).day().year())
                     .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.white.opacity(0.56))
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Button { showingAccount = true } label: {
                 ZStack {
-                    Circle().fill(.white.opacity(0.10))
+                    Circle().fill(.white).shadow(color: .black.opacity(0.10), radius: 8, y: 3)
                     Image(systemName: accountStore.credential == nil ? "person.crop.circle.badge.plus" : "person.crop.circle.fill")
                         .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(.primary)
                 }
                 .frame(width: 46, height: 46)
             }
             .buttonStyle(.plain)
         }
+    }
+
+    private var storeTabs: some View {
+        HStack(spacing: 0) {
+            StoreTab(title: "商店", selected: true)
+            StoreTab(title: "VCT 商店", selected: false)
+            StoreTab(title: "战斗通行证", selected: false)
+        }
+        .padding(.horizontal, 4)
+        .padding(.bottom, 4)
+        .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.08)).frame(height: 1) }
     }
 
     private var welcomeCard: some View {
@@ -83,7 +96,7 @@ struct ContentView: View {
                     .font(.title2.bold())
                 Text("绑定你的无畏契约账号，查看今日商店与心愿清单。所有数据只保存在本机。")
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.62))
+                    .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Button { showingAccount = true } label: {
@@ -107,7 +120,7 @@ struct ContentView: View {
                     if let lastUpdated = shopModel.lastUpdated {
                         Text("更新于 \(lastUpdated.formatted(date: .omitted, time: .shortened))")
                             .font(.caption)
-                            .foregroundStyle(.white.opacity(0.45))
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Spacer()
@@ -128,7 +141,7 @@ struct ContentView: View {
             } else if shopModel.items.isEmpty {
                 EmptyCard()
             } else {
-                LazyVGrid(columns: columns, spacing: 14) {
+                LazyVStack(spacing: 16) {
                     ForEach(shopModel.items) { item in
                         ShopItemCard(item: item, isFavorite: watchlist.contains(item.name)) {
                             watchlist.toggle(item.name)
@@ -143,14 +156,14 @@ struct ContentView: View {
 private struct AppBackground: View {
     var body: some View {
         LinearGradient(
-            colors: [Color(red: 0.06, green: 0.07, blue: 0.12), Color(red: 0.13, green: 0.08, blue: 0.20), Color(red: 0.05, green: 0.06, blue: 0.10)],
+            colors: [Color.white, Color(red: 0.98, green: 0.98, blue: 0.97), Color(red: 0.94, green: 0.96, blue: 0.98)],
             startPoint: .topLeading,
             endPoint: .bottomTrailing
         )
         .ignoresSafeArea()
         .overlay(alignment: .topTrailing) {
             Circle()
-                .fill(AppTheme.accent.opacity(0.16))
+                .fill(AppTheme.red.opacity(0.08))
                 .frame(width: 240, height: 240)
                 .blur(radius: 45)
                 .offset(x: 90, y: -80)
@@ -158,57 +171,153 @@ private struct AppBackground: View {
     }
 }
 
+private struct StoreTab: View {
+    let title: String
+    let selected: Bool
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Text(title)
+                .font(.subheadline.weight(selected ? .bold : .medium))
+                .foregroundStyle(selected ? .primary : .secondary)
+            Capsule()
+                .fill(selected ? Color.black : .clear)
+                .frame(width: selected ? 34 : 0, height: 3)
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
 private struct ShopItemCard: View {
     let item: ShopItem
     let isFavorite: Bool
     let onFavorite: () -> Void
+    @State private var revealed = false
+    @State private var opening = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack(alignment: .topTrailing) {
-                AsyncImage(url: item.imageURL) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable().scaledToFit().padding(10)
-                    default: Image(systemName: "shippingbox.fill").font(.largeTitle).foregroundStyle(.white.opacity(0.25))
-                    }
+        Button(action: reveal) {
+            ZStack {
+                if revealed {
+                    revealedCard
+                } else {
+                    mysteryCard
                 }
-                .frame(maxWidth: .infinity)
-                .frame(height: 150)
-                .background {
-                    AsyncImage(url: item.backgroundURL) { phase in
-                        if case .success(let image) = phase { image.resizable().scaledToFill() }
-                    }
-                    .overlay(.black.opacity(0.30))
-                    .clipped()
-                }
-                Button(action: onFavorite) {
-                    Image(systemName: isFavorite ? "heart.fill" : "heart")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(isFavorite ? AppTheme.accent : .white)
-                        .padding(10)
-                }
-                .buttonStyle(.plain)
+                if opening { RevealBurst(color: qualityColor) }
             }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(item.name)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(2)
-                    .frame(minHeight: 38, alignment: .topLeading)
-                HStack {
-                    Text(item.category)
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.45))
-                    Spacer()
-                    Text("¥\(item.price)")
-                        .font(.subheadline.bold())
-                        .foregroundStyle(AppTheme.accent)
-                }
-            }
-            .padding(12)
+            .frame(maxWidth: .infinity)
+            .frame(height: 176)
+            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(qualityColor.opacity(0.55), lineWidth: revealed ? 1.5 : 1))
+            .shadow(color: qualityColor.opacity(revealed ? 0.20 : 0.08), radius: revealed ? 14 : 5, y: 6)
         }
-        .background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(.white.opacity(0.08)))
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .buttonStyle(.plain)
+        .overlay(alignment: .topTrailing) {
+            Button(action: onFavorite) {
+                Image(systemName: isFavorite ? "heart.fill" : "heart")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(isFavorite ? AppTheme.red : .white.opacity(0.9))
+                    .padding(12)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var mysteryCard: some View {
+        ZStack {
+            Color(red: 0.12, green: 0.18, blue: 0.24)
+            MysteryGrid()
+            VStack(spacing: 9) {
+                Image(systemName: "questionmark")
+                    .font(.system(size: 34, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.92))
+                    .padding(16)
+                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(.white.opacity(0.82), lineWidth: 2).rotationEffect(.degrees(45)))
+                Text("点击揭晓").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.75))
+            }
+        }
+    }
+
+    private var revealedCard: some View {
+        ZStack(alignment: .bottomLeading) {
+            AsyncImage(url: item.backgroundURL) { phase in
+                if case .success(let image) = phase { image.resizable().scaledToFill() }
+                else { Color(red: 0.11, green: 0.18, blue: 0.25) }
+            }
+            .overlay(.black.opacity(0.15))
+            .clipped()
+            AsyncImage(url: item.imageURL) { phase in
+                if case .success(let image) = phase { image.resizable().scaledToFit().padding(.horizontal, 34).padding(.top, 8) }
+                else { Image(systemName: "shippingbox.fill").font(.largeTitle).foregroundStyle(.white.opacity(0.35)) }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            LinearGradient(colors: [.clear, .black.opacity(0.78)], startPoint: .center, endPoint: .bottom)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(item.name).font(.headline.weight(.bold)).foregroundStyle(.white).lineLimit(1)
+                HStack(spacing: 8) {
+                    Text(item.category).font(.caption).foregroundStyle(.white.opacity(0.78))
+                    Text("¥\(item.price)").font(.subheadline.bold()).foregroundStyle(.white)
+                }
+            }
+            .padding(15)
+        }
+    }
+
+    private func reveal() {
+        guard !revealed, !opening else { return }
+        opening = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Task {
+            try? await Task.sleep(for: .milliseconds(520))
+            withAnimation(.spring(response: 0.48, dampingFraction: 0.82)) { revealed = true }
+            try? await Task.sleep(for: .milliseconds(320))
+            withAnimation(.easeOut(duration: 0.2)) { opening = false }
+        }
+    }
+
+    private var qualityColor: Color {
+        let value = (item.rarity + item.category).lowercased()
+        if value.contains("限定") || value.contains("exclusive") { return Color(red: 0.98, green: 0.34, blue: 0.42) }
+        if value.contains("卓越") || value.contains("premium") { return Color(red: 0.72, green: 0.40, blue: 0.92) }
+        if value.contains("豪华") || value.contains("deluxe") { return Color(red: 0.30, green: 0.57, blue: 0.94) }
+        if value.contains("精选") || value.contains("select") { return Color(red: 0.30, green: 0.76, blue: 0.58) }
+        return Color(red: 0.58, green: 0.67, blue: 0.74)
+    }
+}
+
+private struct MysteryGrid: View {
+    var body: some View {
+        GeometryReader { proxy in
+            Path { path in
+                let step: CGFloat = 42
+                for x in stride(from: -proxy.size.height, through: proxy.size.width, by: step) {
+                    path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x + proxy.size.height, y: proxy.size.height))
+                }
+                for x in stride(from: 0, through: proxy.size.width + proxy.size.height, by: step) {
+                    path.move(to: CGPoint(x: x, y: 0)); path.addLine(to: CGPoint(x: x - proxy.size.height, y: proxy.size.height))
+                }
+            }
+            .stroke(.white.opacity(0.07), lineWidth: 1)
+        }
+    }
+}
+
+private struct RevealBurst: View {
+    let color: Color
+    @State private var scale = 0.2
+    @State private var opacity = 0.9
+
+    var body: some View {
+        ZStack {
+            Circle().stroke(color, lineWidth: 3).scaleEffect(scale).opacity(opacity)
+            ForEach(0..<8, id: \.self) { index in
+                Capsule().fill(color).frame(width: 3, height: 24).offset(y: -42).rotationEffect(.degrees(Double(index) * 45)).scaleEffect(scale)
+            }
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            withAnimation(.easeOut(duration: 0.65)) { scale = 2.6; opacity = 0 }
+        }
     }
 }
 
@@ -216,7 +325,7 @@ private struct LoadingCard: View {
     var body: some View {
         VStack(spacing: 14) {
             ProgressView().tint(AppTheme.accent).scaleEffect(1.2)
-            Text("正在同步今日商店…").foregroundStyle(.white.opacity(0.6))
+            Text("正在同步今日商店…").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 56).glassCard()
     }
@@ -227,7 +336,7 @@ private struct EmptyCard: View {
         VStack(spacing: 10) {
             Image(systemName: "moon.stars.fill").font(.largeTitle).foregroundStyle(AppTheme.accent)
             Text("今天还没有可用商品").font(.headline)
-            Text("下拉刷新试试").font(.subheadline).foregroundStyle(.white.opacity(0.48))
+            Text("下拉刷新试试").font(.subheadline).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity).padding(.vertical, 45).glassCard()
     }
@@ -239,7 +348,7 @@ private struct ErrorCard: View {
     var body: some View {
         VStack(spacing: 14) {
             Image(systemName: "wifi.exclamationmark").font(.largeTitle).foregroundStyle(.orange)
-            Text(message).font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.72))
+            Text(message).font(.subheadline).multilineTextAlignment(.center).foregroundStyle(.secondary)
             Button("重新加载", action: retry).buttonStyle(SecondaryButtonStyle())
         }
         .frame(maxWidth: .infinity).padding(.vertical, 34).glassCard()
@@ -251,7 +360,6 @@ struct AccountView: View {
     @EnvironmentObject private var accountStore: AccountStore
     @EnvironmentObject private var shopModel: ShopViewModel
     @State private var showingLogin = false
-    @State private var showingManual = false
 
     var body: some View {
         NavigationStack {
@@ -262,7 +370,7 @@ struct AccountView: View {
                         VStack(spacing: 8) {
                             Image(systemName: "person.crop.circle.fill").font(.system(size: 54)).foregroundStyle(AppTheme.accent)
                             Text(credential.nickname ?? "已绑定账号").font(.title3.bold())
-                            Text("ID  \(credential.userId)").font(.caption).foregroundStyle(.white.opacity(0.5))
+                            Text("ID  \(credential.userId)").font(.caption).foregroundStyle(.secondary)
                         }
                         .padding(.vertical, 18)
                         Button { Task { await shopModel.reload(using: credential); dismiss() } } label: {
@@ -275,17 +383,13 @@ struct AccountView: View {
                         Image(systemName: "qrcode.viewfinder").font(.system(size: 54)).foregroundStyle(AppTheme.accent)
                         Text("绑定无畏契约账号").font(.title2.bold())
                         Text("扫码登录后，商店数据会直接从官方接口同步。")
-                            .font(.subheadline).foregroundStyle(.white.opacity(0.58)).multilineTextAlignment(.center)
+                            .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.center)
                         Button { showingLogin = true } label: {
                             Label("QQ 扫码登录", systemImage: "qrcode")
                                 .frame(maxWidth: .infinity).padding(.vertical, 14)
                         }.buttonStyle(PrimaryButtonStyle())
-                        Button { showingManual = true } label: {
-                            Label("手动填写凭证", systemImage: "key.horizontal")
-                                .frame(maxWidth: .infinity).padding(.vertical, 14)
-                        }.buttonStyle(SecondaryButtonStyle())
                         Text("登录参数只保存在本机，不会上传到第三方服务器。")
-                            .font(.caption).foregroundStyle(.white.opacity(0.4)).multilineTextAlignment(.center).padding(.top, 8)
+                            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.top, 8)
                     }
                     Spacer()
                 }
@@ -295,7 +399,6 @@ struct AccountView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
             .sheet(isPresented: $showingLogin) { QRLoginView().environmentObject(accountStore) }
-            .sheet(isPresented: $showingManual) { ManualCredentialView().environmentObject(accountStore) }
         }
     }
 }
@@ -319,15 +422,15 @@ private struct QRLoginView: View {
                             .padding(14).background(.white, in: RoundedRectangle(cornerRadius: 18))
                         Text("请使用 QQ 扫码并确认").font(.headline)
                     } else {
-                        Image(systemName: "qrcode").font(.system(size: 130, weight: .thin)).foregroundStyle(.white.opacity(0.25))
+                        Image(systemName: "qrcode").font(.system(size: 130, weight: .thin)).foregroundStyle(.secondary.opacity(0.35))
                     }
-                    Text(message).font(.subheadline).foregroundStyle(.white.opacity(0.62))
+                    Text(message).font(.subheadline).foregroundStyle(.secondary)
                     if let error { Text(error).font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center) }
                     Button { begin() } label: {
                         if isWorking { ProgressView().tint(.black) } else { Text(payload == nil ? "生成二维码" : "重新生成") }
                     }.buttonStyle(PrimaryButtonStyle()).disabled(isWorking)
-                    Text("二维码有效期有限。若登录参数发生变化，可返回账号页使用手动凭证。")
-                        .font(.caption).foregroundStyle(.white.opacity(0.4)).multilineTextAlignment(.center)
+                    Text("二维码有效期有限，失效后请重新生成。")
+                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Spacer()
                 }.padding(24)
             }
@@ -352,35 +455,6 @@ private struct QRLoginView: View {
                 message = "登录未完成"
             }
             isWorking = false
-        }
-    }
-}
-
-private struct ManualCredentialView: View {
-    @Environment(\.dismiss) private var dismiss
-    @EnvironmentObject private var accountStore: AccountStore
-    @State private var userID = ""
-    @State private var tid = ""
-
-    var body: some View {
-        NavigationStack {
-            ZStack {
-                AppBackground()
-                VStack(alignment: .leading, spacing: 18) {
-                    Text("如果扫码链路暂时不可用，可以从插件或已登录设备中填入这两个值。")
-                        .font(.subheadline).foregroundStyle(.white.opacity(0.58))
-                    TextField("userId", text: $userID).textInputAutocapitalization(.never).autocorrectionDisabled().textFieldStyle(ValTextFieldStyle())
-                    SecureField("tid", text: $tid).textInputAutocapitalization(.never).textFieldStyle(ValTextFieldStyle())
-                    Button("保存并查询") {
-                        accountStore.save(ShopCredential(userId: userID.trimmingCharacters(in: .whitespacesAndNewlines), tid: tid.trimmingCharacters(in: .whitespacesAndNewlines), nickname: nil, openID: nil, uin: nil))
-                        dismiss()
-                    }.buttonStyle(PrimaryButtonStyle()).disabled(userID.isEmpty || tid.isEmpty)
-                    Spacer()
-                }.padding(24)
-            }
-            .navigationTitle("手动凭证")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("取消") { dismiss() } } }
         }
     }
 }
@@ -411,20 +485,73 @@ struct WatchlistView: View {
     }
 }
 
-private enum AppTheme { static let accent = Color(red: 0.95, green: 0.68, blue: 0.32) }
+private struct ShopBottomBar: View {
+    let openAccount: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            BottomBarButton(title: "首页", icon: "house.fill", selected: true) {}
+            BottomBarButton(title: "好友", icon: "person.2.fill", selected: false) {}
+            Button(action: {}) {
+                Image(systemName: "plus")
+                    .font(.title2.weight(.bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(AppTheme.red, in: Circle())
+                    .shadow(color: AppTheme.red.opacity(0.25), radius: 8, y: 4)
+            }
+            .buttonStyle(.plain)
+            BottomBarButton(title: "福利", icon: "gift.fill", selected: false) {}
+            BottomBarButton(title: "我的", icon: "person.crop.circle.fill", selected: false, action: openAccount)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 9)
+        .padding(.bottom, 6)
+        .background(.regularMaterial)
+        .overlay(alignment: .top) { Rectangle().fill(Color.black.opacity(0.06)).frame(height: 1) }
+    }
+}
+
+private struct BottomBarButton: View {
+    let title: String
+    let icon: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 19, weight: .semibold))
+                Text(title).font(.caption2.weight(.medium))
+            }
+            .foregroundStyle(selected ? AppTheme.red : .secondary)
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private enum AppTheme {
+    static let red = Color(red: 0.95, green: 0.18, blue: 0.28)
+    static let accent = red
+}
 
 private struct PrimaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View { configuration.label.foregroundStyle(.black).background(AppTheme.accent, in: RoundedRectangle(cornerRadius: 15, style: .continuous)).opacity(configuration.isPressed ? 0.75 : 1).animation(.easeOut(duration: 0.15), value: configuration.isPressed) }
 }
 
 private struct SecondaryButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View { configuration.label.foregroundStyle(.white).background(.white.opacity(0.10), in: RoundedRectangle(cornerRadius: 15, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(.white.opacity(0.10))).opacity(configuration.isPressed ? 0.75 : 1) }
-}
-
-private struct ValTextFieldStyle: TextFieldStyle {
-    func _body(configuration: TextField<Self._Label>) -> some View { configuration.padding(15).background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14, style: .continuous)).foregroundStyle(.white).overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(.white.opacity(0.10))) }
+    func makeBody(configuration: Configuration) -> some View { configuration.label.foregroundStyle(.primary).background(Color.black.opacity(0.05), in: RoundedRectangle(cornerRadius: 15, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).stroke(Color.black.opacity(0.10))).opacity(configuration.isPressed ? 0.75 : 1) }
 }
 
 private extension View {
-    func glassCard() -> some View { background(.white.opacity(0.075), in: RoundedRectangle(cornerRadius: 24, style: .continuous)).overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(.white.opacity(0.09))) }
+    @ViewBuilder
+    func glassCard() -> some View {
+        if #available(iOS 26.0, *) {
+            self.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        } else {
+            self.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).stroke(Color.black.opacity(0.08)))
+        }
+    }
 }

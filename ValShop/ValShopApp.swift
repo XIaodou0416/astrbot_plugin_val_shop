@@ -10,7 +10,7 @@ struct ValShopApp: App {
             ContentView()
                 .environmentObject(accountStore)
                 .environmentObject(shopModel)
-                .preferredColorScheme(.dark)
+                .preferredColorScheme(.light)
         }
     }
 }
