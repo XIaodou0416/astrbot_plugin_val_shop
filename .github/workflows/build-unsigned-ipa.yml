@@ -20,7 +20,7 @@ jobs:
       - name: Generate project
         run: xcodegen generate
       - name: Run tests
-        run: xcodebuild test -project ValShop.xcodeproj -scheme ValShop -destination 'platform=iOS Simulator,name=iPhone 15' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+        run: xcodebuild test -project ValShop.xcodeproj -scheme ValShop -destination 'platform=iOS Simulator,name=iPhone 17' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
       - name: Build unsigned app
         run: |
           xcodebuild -project ValShop.xcodeproj -scheme ValShop -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
