@@ -15,7 +15,6 @@ struct ContentView: View {
                 ScrollView(showsIndicators: false) {
                     VStack(alignment: .leading, spacing: 24) {
                         header
-                        storeTabs
                         if accountStore.credential == nil {
                             welcomeCard
                         } else {
@@ -28,9 +27,6 @@ struct ContentView: View {
                 }
                 .refreshable {
                     await shopModel.reload(using: accountStore.credential)
-                }
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    ShopBottomBar { showingAccount = true }
                 }
             }
             .toolbar(.hidden, for: .navigationBar)
@@ -73,17 +69,6 @@ struct ContentView: View {
             }
             .buttonStyle(.plain)
         }
-    }
-
-    private var storeTabs: some View {
-        HStack(spacing: 0) {
-            StoreTab(title: "商店", selected: true)
-            StoreTab(title: "VCT 商店", selected: false)
-            StoreTab(title: "战斗通行证", selected: false)
-        }
-        .padding(.horizontal, 4)
-        .padding(.bottom, 4)
-        .overlay(alignment: .bottom) { Rectangle().fill(Color.black.opacity(0.08)).frame(height: 1) }
     }
 
     private var welcomeCard: some View {
@@ -168,23 +153,6 @@ private struct AppBackground: View {
                 .blur(radius: 45)
                 .offset(x: 90, y: -80)
         }
-    }
-}
-
-private struct StoreTab: View {
-    let title: String
-    let selected: Bool
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Text(title)
-                .font(.subheadline.weight(selected ? .bold : .medium))
-                .foregroundStyle(selected ? .primary : .secondary)
-            Capsule()
-                .fill(selected ? Color.black : .clear)
-                .frame(width: selected ? 34 : 0, height: 3)
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -406,29 +374,25 @@ struct AccountView: View {
 private struct QRLoginView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var accountStore: AccountStore
-    @State private var payload: QRLoginPayload?
-    @State private var isWorking = false
-    @State private var message = "点击下方生成二维码"
-    @State private var error: String?
-    private let service = QRLoginService()
+    @StateObject private var model = QRLoginViewModel()
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackground()
                 VStack(spacing: 20) {
-                    if let payload, let image = UIImage(data: payload.imageData) {
+                    if let payload = model.payload, let image = UIImage(data: payload.imageData) {
                         Image(uiImage: image).interpolation(.none).resizable().scaledToFit().frame(width: 230, height: 230)
                             .padding(14).background(.white, in: RoundedRectangle(cornerRadius: 18))
                         Text("请使用 QQ 扫码并确认").font(.headline)
                     } else {
                         Image(systemName: "qrcode").font(.system(size: 130, weight: .thin)).foregroundStyle(.secondary.opacity(0.35))
                     }
-                    Text(message).font(.subheadline).foregroundStyle(.secondary)
-                    if let error { Text(error).font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center) }
-                    Button { begin() } label: {
-                        if isWorking { ProgressView().tint(.black) } else { Text(payload == nil ? "生成二维码" : "重新生成") }
-                    }.buttonStyle(PrimaryButtonStyle()).disabled(isWorking)
+                    Text(model.message).font(.subheadline).foregroundStyle(.secondary)
+                    if let error = model.error { Text(error).font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center) }
+                    Button { model.begin(accountStore: accountStore) } label: {
+                        if model.isWorking { ProgressView().tint(.black) } else { Text(model.payload == nil ? "生成二维码" : "重新生成") }
+                    }.buttonStyle(PrimaryButtonStyle()).disabled(model.isWorking)
                     Text("二维码有效期有限，失效后请重新生成。")
                         .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Spacer()
@@ -437,25 +401,61 @@ private struct QRLoginView: View {
             .navigationTitle("QQ 扫码登录")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("取消") { dismiss() } } }
+            .onDisappear { model.cancel() }
+            .onChange(of: model.didLogin) { _, didLogin in
+                if didLogin { dismiss() }
+            }
         }
     }
+}
 
-    private func begin() {
-        isWorking = true; error = nil; message = "正在生成二维码…"
-        Task {
+@MainActor
+private final class QRLoginViewModel: ObservableObject {
+    @Published private(set) var payload: QRLoginPayload?
+    @Published private(set) var isWorking = false
+    @Published private(set) var message = "点击下方生成二维码"
+    @Published private(set) var error: String?
+    @Published private(set) var didLogin = false
+
+    private let service = QRLoginService()
+    private var task: Task<Void, Never>?
+
+    func begin(accountStore: AccountStore) {
+        task?.cancel()
+        isWorking = true
+        error = nil
+        didLogin = false
+        message = "正在生成二维码…"
+        task = Task { [weak self, weak accountStore] in
+            guard let self else { return }
             do {
                 let newPayload = try await service.makeQRCode()
-                payload = newPayload; message = "等待扫码确认…"
+                try Task.checkCancellation()
+                payload = newPayload
+                message = "等待扫码确认…"
                 let result = try await service.waitForScan(newPayload)
-                accountStore.save(ShopCredential(userId: result.userID, tid: result.tid, nickname: nil, openID: result.openID, uin: result.uin))
+                try Task.checkCancellation()
+                accountStore?.save(ShopCredential(userId: result.userID, tid: result.tid, nickname: nil, openID: result.openID, uin: result.uin))
                 message = "登录成功"
-                dismiss()
+                didLogin = true
+            } catch is CancellationError {
+                return
             } catch {
                 self.error = error.localizedDescription
                 message = "登录未完成"
             }
             isWorking = false
         }
+    }
+
+    func cancel() {
+        task?.cancel()
+        task = nil
+        isWorking = false
+    }
+
+    deinit {
+        task?.cancel()
     }
 }
 
@@ -482,52 +482,6 @@ struct WatchlistView: View {
             .navigationTitle("心愿清单")
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("完成") { dismiss() } } }
         }
-    }
-}
-
-private struct ShopBottomBar: View {
-    let openAccount: () -> Void
-
-    var body: some View {
-        HStack(spacing: 0) {
-            BottomBarButton(title: "首页", icon: "house.fill", selected: true) {}
-            BottomBarButton(title: "好友", icon: "person.2.fill", selected: false) {}
-            Button(action: {}) {
-                Image(systemName: "plus")
-                    .font(.title2.weight(.bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 52, height: 52)
-                    .background(AppTheme.red, in: Circle())
-                    .shadow(color: AppTheme.red.opacity(0.25), radius: 8, y: 4)
-            }
-            .buttonStyle(.plain)
-            BottomBarButton(title: "福利", icon: "gift.fill", selected: false) {}
-            BottomBarButton(title: "我的", icon: "person.crop.circle.fill", selected: false, action: openAccount)
-        }
-        .padding(.horizontal, 10)
-        .padding(.top, 9)
-        .padding(.bottom, 6)
-        .background(.regularMaterial)
-        .overlay(alignment: .top) { Rectangle().fill(Color.black.opacity(0.06)).frame(height: 1) }
-    }
-}
-
-private struct BottomBarButton: View {
-    let title: String
-    let icon: String
-    let selected: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.system(size: 19, weight: .semibold))
-                Text(title).font(.caption2.weight(.medium))
-            }
-            .foregroundStyle(selected ? AppTheme.red : .secondary)
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
     }
 }
 

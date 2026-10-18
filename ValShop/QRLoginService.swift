@@ -37,12 +37,19 @@ final class QRLoginService {
         let page = String(decoding: pageData, as: UTF8.self)
         let loginSig = match(#"g_login_sig=encodeURIComponent\(\"([^\"]+)\"\)"#, in: page) ?? cookie("pt_login_sig") ?? ""
         let jsver = match(#"jsver\s*=\s*['\"]([^'\"]+)['\"]"#, in: page) ?? "28d22679"
-        let qrURL = URL(string: "https://xui.ptlogin2.qq.com/ssl/ptqrshow?s=8&e=0&appid=716027609&type=0&t=\(Double.random(in: 0..<1))&u1=http%3A%2F%2Fconnect.qq.com&daid=381&pt_3rd_aid=102061775")!
+        guard let qrURL = URL(string: "https://xui.ptlogin2.qq.com/ssl/ptqrshow?s=8&e=0&appid=716027609&type=0&t=\(Double.random(in: 0..<1))&u1=http%3A%2F%2Fconnect.qq.com&daid=381&pt_3rd_aid=102061775") else {
+            throw LoginError.qrUnavailable
+        }
         var qrRequest = URLRequest(url: qrURL)
         qrRequest.setValue(loginURL.absoluteString, forHTTPHeaderField: "Referer")
         qrRequest.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)", forHTTPHeaderField: "User-Agent")
         let (imageData, qrResponse) = try await session.data(for: qrRequest)
-        guard !imageData.isEmpty else { throw LoginError.qrUnavailable }
+        guard !imageData.isEmpty,
+              let response = qrResponse as? HTTPURLResponse,
+              (200..<300).contains(response.statusCode),
+              response.mimeType?.hasPrefix("image/") == true else {
+            throw LoginError.qrUnavailable
+        }
         let qrsig = cookie("qrsig") ?? responseCookie("qrsig", from: qrResponse) ?? responseCookie("qrsig", from: pageResponse)
         guard let qrsig, !qrsig.isEmpty else { throw LoginError.qrUnavailable }
         let token = calcToken(qrsig)
@@ -55,7 +62,9 @@ final class QRLoginService {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             try await Task.sleep(for: .seconds(2))
-            var components = URLComponents(string: "https://xui.ptlogin2.qq.com/ssl/ptqrlogin")!
+            guard var components = URLComponents(string: "https://xui.ptlogin2.qq.com/ssl/ptqrlogin") else {
+                throw LoginError.qrUnavailable
+            }
             components.queryItems = [
                 URLQueryItem(name: "u1", value: "http://connect.qq.com"),
                 URLQueryItem(name: "from_ui", value: "1"),
@@ -68,7 +77,8 @@ final class QRLoginService {
                 URLQueryItem(name: "jsver", value: "28d22679"),
                 URLQueryItem(name: "r", value: String.randomToken())
             ]
-            var request = URLRequest(url: components.url!)
+            guard let requestURL = components.url else { throw LoginError.qrUnavailable }
+            var request = URLRequest(url: requestURL)
             request.setValue(payload.loginURL.absoluteString, forHTTPHeaderField: "Referer")
             let (data, _) = try await session.data(for: request)
             let text = String(decoding: data, as: UTF8.self)
@@ -86,7 +96,9 @@ final class QRLoginService {
     }
 
     private func exchange(openID: String, accessToken: String) async throws -> LoginResult {
-        let url = URL(string: "https://app.mval.qq.com/go/auth/login_by_qq?source_game_zone=agame&game_zone=agame")!
+        guard let url = URL(string: "https://app.mval.qq.com/go/auth/login_by_qq?source_game_zone=agame&game_zone=agame") else {
+            throw LoginError.exchangeFailed
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
